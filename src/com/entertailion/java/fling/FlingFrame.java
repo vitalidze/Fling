@@ -24,12 +24,9 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowEvent;
 import java.awt.event.WindowListener;
-import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
@@ -65,14 +62,9 @@ import javax.swing.JTextField;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 import javax.swing.plaf.basic.BasicSliderUI;
-import javax.xml.parsers.SAXParser;
-import javax.xml.parsers.SAXParserFactory;
 
-import org.apache.http.Header;
-import org.apache.http.HttpResponse;
-import org.xml.sax.InputSource;
-import org.xml.sax.XMLReader;
-
+import su.litvak.chromecast.api.v2.ChromeCast;
+import su.litvak.chromecast.api.v2.ChromeCasts;
 import uk.co.caprica.vlcj.player.MediaPlayer;
 import uk.co.caprica.vlcj.player.MediaPlayerEventAdapter;
 import uk.co.caprica.vlcj.player.MediaPlayerFactory;
@@ -83,7 +75,7 @@ import uk.co.caprica.vlcj.player.MediaPlayerFactory;
  * @author leon_nicholls
  * 
  */
-public class FlingFrame extends JFrame implements ActionListener, BroadcastDiscoveryHandler, ChangeListener, WindowListener {
+public class FlingFrame extends JFrame implements ActionListener, ChangeListener, WindowListener {
 	private static final String LOG_TAG = "FlingFrame";
 
 	// https://www.gstatic.com/cv/receiver.html?${POST_DATA}
@@ -99,8 +91,8 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 	private static final String PROPERTY_TRANSCODING_PARAMETERS = "transcoding.parameters";
 	private static final String PROPERTY_MANUAL_SERVERS = "manual.servers";
 	private int port = EmbeddedServer.HTTP_PORT;
-	private List<DialServer> servers = new ArrayList<DialServer>();
-	private List<DialServer> manualServers = new ArrayList<DialServer>();
+	private List<ChromeCast> servers = new ArrayList<ChromeCast>();
+	private List<ChromeCast> manualServers = new ArrayList<ChromeCast>();
 	private JComboBox deviceList;
 	private JDialog progressDialog;
 	private JButton refreshButton, playButton, pauseButton, stopButton, settingsButton;
@@ -110,18 +102,13 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 	private ResourceBundle resourceBundle;
 	private EmbeddedServer embeddedServer;
 
-	private BroadcastDiscoveryClient broadcastClient;
-	private Thread broadcastClientThread;
-	private TrackedDialServers trackedServers = new TrackedDialServers();
-	private RampClient rampClient;
-
 	private MediaPlayerFactory mediaPlayerFactory;
 	private MediaPlayer mediaPlayer;
 
 	private String transcodingParameterValues = TRANSCODING_PARAMETERS;
 	private String transcodingExtensionValues = TRANSCODING_EXTENSIONS;
 
-	private DialServer selectedDialServer;
+	private ChromeCast selectedChromeCast;
 
 	private SimpleDateFormat simpleDateFormat = new SimpleDateFormat("HH:mm:ss");
 
@@ -133,7 +120,6 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 	public FlingFrame(String appId) {
 		super();
 		this.appId = appId;
-		rampClient = new RampClient(this);
 
 		addWindowListener(this);
 
@@ -192,7 +178,7 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 				if (manualServers.size() == 0) {
 					manualDeviceList.setVisible(false);
 				} else {
-					for (DialServer dialServer : manualServers) {
+					for (ChromeCast dialServer : manualServers) {
 						manualDeviceList.addItem(dialServer);
 					}
 				}
@@ -210,16 +196,18 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 						int option = JOptionPane.showConfirmDialog(null, message, resourceBundle.getString("device.manual"), JOptionPane.OK_CANCEL_OPTION);
 						if (option == JOptionPane.OK_OPTION) {
 							try {
-								manualServers.add(new DialServer(name.getText(), InetAddress.getByName(ipAddress.getText())));
+                                ChromeCast cast = new ChromeCast(InetAddress.getByName(ipAddress.getText()).getHostAddress());
+                                cast.setName(name.getText());
+								manualServers.add(cast);
 
 								Object selected = deviceList.getSelectedItem();
 								int selectedIndex = deviceList.getSelectedIndex();
 								deviceList.removeAllItems();
 								deviceList.addItem(resourceBundle.getString("devices.select"));
-								for (DialServer dialServer : servers) {
+								for (ChromeCast dialServer : servers) {
 									deviceList.addItem(dialServer);
 								}
-								for (DialServer dialServer : manualServers) {
+								for (ChromeCast dialServer : manualServers) {
 									deviceList.addItem(dialServer);
 								}
 								deviceList.invalidate();
@@ -233,7 +221,7 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 								}
 
 								manualDeviceList.removeAllItems();
-								for (DialServer dialServer : manualServers) {
+								for (ChromeCast dialServer : manualServers) {
 									manualDeviceList.addItem(dialServer);
 								}
 								manualDeviceList.setVisible(true);
@@ -293,7 +281,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 				JSlider source = (JSlider) e.getSource();
 				if (!source.getValueIsAdjusting()) {
 					int position = (int) source.getValue();
-					rampClient.volume(position / 100.0f);
+                    try {
+                        selectedChromeCast.setVolume(position / 100.0f);
+                    } catch (IOException ex) {
+                        Log.e(LOG_TAG, "Failed setting volume", ex);
+                    }
 				}
 			}
 
@@ -323,7 +315,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		playButton.addActionListener(new ActionListener() {
 
 			public void actionPerformed(ActionEvent e) {
-				rampClient.play();
+                try {
+                    selectedChromeCast.play();
+                } catch (IOException ex) {
+                    Log.e(LOG_TAG, "Failed to play media", ex);
+                }
 			}
 		});
 		buttonPane.add(playButton);
@@ -333,7 +329,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		pauseButton.addActionListener(new ActionListener() {
 
 			public void actionPerformed(ActionEvent e) {
-				rampClient.pause();
+                try {
+                    selectedChromeCast.pause();
+                } catch (IOException ex) {
+                    Log.e(LOG_TAG, "Failed pausing playback", ex);
+                }
 			}
 		});
 		buttonPane.add(pauseButton);
@@ -343,7 +343,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		stopButton.addActionListener(new ActionListener() {
 
 			public void actionPerformed(ActionEvent e) {
-				rampClient.stop();
+                try {
+                    selectedChromeCast.stopApp();
+                } catch (IOException ex) {
+                    Log.e(LOG_TAG, "Failed stopping application", ex);
+                }
 				setDuration(0);
 				scrubber.setValue(0);
 				scrubber.setEnabled(false);
@@ -400,11 +404,15 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		JSlider source = (JSlider) e.getSource();
 		if (!source.getValueIsAdjusting() && !playbackValueIsAdjusting) {
 			int position = (int) source.getValue();
-			if (position == 0) {
-				rampClient.play(0);
-			} else {
-				rampClient.play((int) (position / 100.0f * duration));
-			}
+            try {
+                if (position == 0) {
+                    selectedChromeCast.seek(0);
+                } else {
+                    selectedChromeCast.seek((int) (position / 100.0f * duration));
+                }
+            } catch (IOException ex) {
+                Log.e(LOG_TAG, "Failed seeking media position", ex);
+            }
 		}
 	}
 
@@ -442,9 +450,6 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 	private void discoverDevices() {
 		Properties properties = loadProperties();
 
-		broadcastClient = new BroadcastDiscoveryClient(this);
-		broadcastClientThread = new Thread(broadcastClient);
-
 		deviceList.removeAllItems();
 		// Prompt selection option
 		deviceList.addItem(resourceBundle.getString("devices.select"));
@@ -454,24 +459,24 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 			public void run() {
 				try {
 					showProgressDialog(resourceBundle.getString("progress.discoveringDevices"));
-					broadcastClientThread.start();
+                    ChromeCasts.startDiscovery();
 
 					// wait a while...
 					// TODO do this better
-					Thread.sleep(BroadcastDiscoveryClient.PROBE_INTERVAL_MS-1);
+					Thread.sleep(500);
 
-					broadcastClient.stop();
+					ChromeCasts.stopDiscovery();
 
 					hideProgressDialog();
 
-					Log.d(LOG_TAG, "size=" + trackedServers.size());
-					for (DialServer dialServer : trackedServers) {
+					Log.d(LOG_TAG, "size=" + ChromeCasts.get().size());
+					for (ChromeCast dialServer : ChromeCasts.get()) {
 						deviceList.addItem(dialServer);
 						servers.add(dialServer);
 					}
 
 					// Now add user's manual servers
-					for (DialServer dialServer : manualServers) {
+					for (ChromeCast dialServer : manualServers) {
 						deviceList.addItem(dialServer);
 					}
 					deviceList.invalidate();
@@ -485,56 +490,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 
 				} catch (InterruptedException e) {
 					Log.e(LOG_TAG, "discoverDevices", e);
-				}
+				} catch (IOException e) {
+                    Log.e(LOG_TAG, "discoverDevices", e);
+                }
 			}
 		}).start();
-	}
-
-	public void onBroadcastFound(final BroadcastAdvertisement advert) {
-		if (advert.getLocation() != null) {
-			new Thread(new Runnable() {
-				public void run() {
-					Log.d(LOG_TAG, "location=" + advert.getLocation());
-					HttpResponse response = new HttpRequestHelper().sendHttpGet(advert.getLocation());
-					if (response != null) {
-						String appsUrl = null;
-						Header header = response.getLastHeader(HEADER_APPLICATION_URL);
-						if (header != null) {
-							appsUrl = header.getValue();
-							if (!appsUrl.endsWith("/")) {
-								appsUrl = appsUrl + "/";
-							}
-							Log.d(LOG_TAG, "appsUrl=" + appsUrl);
-						}
-						try {
-							InputStream inputStream = response.getEntity().getContent();
-							BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-
-							InputSource inStream = new org.xml.sax.InputSource();
-							inStream.setCharacterStream(reader);
-							SAXParserFactory spf = SAXParserFactory.newInstance();
-							SAXParser sp = spf.newSAXParser();
-							XMLReader xr = sp.getXMLReader();
-							BroadcastHandler broadcastHandler = new BroadcastHandler();
-							xr.setContentHandler(broadcastHandler);
-							xr.parse(inStream);
-							Log.d(LOG_TAG, "modelName=" + broadcastHandler.getDialServer().getModelName());
-							// Only handle ChromeCast devices; not other DIAL
-							// devices like ChromeCast devices
-							if (broadcastHandler.getDialServer().getModelName().equals(CHROME_CAST_MODEL_NAME)) {
-								Log.d(LOG_TAG, "ChromeCast device found: " + advert.getIpAddress().getHostAddress());
-								DialServer dialServer = new DialServer(advert.getLocation(), advert.getIpAddress(), advert.getPort(), appsUrl, broadcastHandler
-										.getDialServer().getFriendlyName(), broadcastHandler.getDialServer().getUuid(), broadcastHandler.getDialServer()
-										.getManufacturer(), broadcastHandler.getDialServer().getModelName());
-								trackedServers.add(dialServer);
-							}
-						} catch (Exception e) {
-							Log.e(LOG_TAG, "parse device description", e);
-						}
-					}
-				}
-			}).start();
-		}
 	}
 
 	private InterfaceAddress getPreferredInetAddress(String prefix) {
@@ -577,8 +537,8 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		Inet4Address selectedInetAddress = null;
 		try {
 			InterfaceAddress interfaceAddress = null;
-			if (selectedDialServer != null) {
-				String address = selectedDialServer.getIpAddress().getHostAddress();
+			if (selectedChromeCast != null) {
+				String address = selectedChromeCast.getAddress();
 				String prefix = address.substring(0, address.indexOf('.') + 1);
 				Log.d(LOG_TAG, "prefix=" + prefix);
 				interfaceAddress = getPreferredInetAddress(prefix);
@@ -658,17 +618,17 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 		int pos = cb.getSelectedIndex();
 		// when device is selected, attempt to connect
 		if (servers != null && pos > 0) {
-			selectedDialServer = (DialServer) cb.getSelectedItem();
+			selectedChromeCast = (ChromeCast) cb.getSelectedItem();
 		}
 	}
 
 	/**
 	 * Send a uri to the ChromeCast device
 	 * 
-	 * @param keycode
+	 * @param file
 	 */
 	protected void sendMediaUrl(String file) {
-		if (selectedDialServer == null) {
+		if (selectedChromeCast == null) {
 			JOptionPane.showMessageDialog(this, resourceBundle.getString("device.select"));
 			return;
 		}
@@ -694,29 +654,10 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 					Inet4Address address = getNetworAddress();
 					if (address != null) {
 						final String url = "http://" + address.getHostAddress() + ":" + port + "/video" + extension;
-						if (!rampClient.isClosed()) {
-							rampClient.stop();
-						}
-						rampClient.launchApp(appId==null?APP_ID:appId, selectedDialServer);
-						// wait for socket to be ready...
-						new Thread(new Runnable() {
-							public void run() {
-								while (!rampClient.isStarted() && !rampClient.isClosed()) {
-									try {
-										// make less than 3 second ping time
-										Thread.sleep(500);
-									} catch (InterruptedException e) {
-									}
-								}
-								if (!rampClient.isClosed()) {
-									try {
-										Thread.sleep(500);
-									} catch (InterruptedException e) {
-									}
-									rampClient.load(url);
-								}
-							}
-						}).start();
+                        selectedChromeCast.connect();
+                        selectedChromeCast.stopApp();
+                        selectedChromeCast.launchApp(appId == null ? APP_ID : appId);
+                        selectedChromeCast.load(url);
 					} else {
 						Log.d(LOG_TAG, "could not find a network interface");
 					}
@@ -805,9 +746,9 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 				}
 			}
 
-			if (!rampClient.isClosed()) {
-				rampClient.stop();
-			}
+            selectedChromeCast.connect();
+            selectedChromeCast.stopApp();
+
 			Inet4Address address = getNetworAddress();
 			if (address != null) {
 				// Play a particular item, with options if necessary
@@ -816,24 +757,9 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 				final String url = "http://" + address.getHostAddress() + ":" + vlcPort + "/cast.webm";
 				Log.d(LOG_TAG, "url=" + url);
 				if (true || isChromeCast()) {
-					rampClient.launchApp(appId==null?APP_ID:appId, selectedDialServer);
-					// wait for socket to be ready...
-					new Thread(new Runnable() {
-						public void run() {
-							while (!rampClient.isStarted() && !rampClient.isClosed()) {
-								try {
-									Thread.sleep(500);
-								} catch (InterruptedException e) {
-								}
-							}
-							if (!rampClient.isClosed()) {
-								mediaPlayer.playMedia(file, options);
-								rampClient.load(url);
-							}
-						}
-					}).start();
-				} else {
-					rampClient.load(url);
+                    selectedChromeCast.launchApp(appId == null ? APP_ID : appId);
+                    mediaPlayer.playMedia(file, options);
+                    selectedChromeCast.load(url);
 				}
 			} else {
 				Log.d(LOG_TAG, "could not find a network interface");
@@ -854,7 +780,9 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 			if (manual != null) {
 				String[] parts = manual.split(":");
 				for (int i = 0; i < parts.length / 2; i++) {
-					manualServers.add(new DialServer(parts[i * 2], InetAddress.getByName(parts[i * 2 + 1])));
+                    ChromeCast cast = new ChromeCast(parts[i * 2 + 1]);
+                    cast.setName(parts[i * 2]);
+					manualServers.add(cast);
 				}
 			}
 		} catch (Exception ex) {
@@ -875,11 +803,11 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 			prop.setProperty(PROPERTY_TRANSCODING_PARAMETERS, transcodingParameterValues);
 			prop.setProperty(PROPERTY_TRANSCODING_EXTENSIONS, transcodingExtensionValues);
 			String manual = "";
-			for (DialServer dialServer : manualServers) {
+			for (ChromeCast dialServer : manualServers) {
 				if (manual.length() > 0) {
 					manual = manual + ":";
 				}
-				manual = manual + dialServer.getFriendlyName() + ":" + dialServer.getIpAddress().getHostAddress();
+				manual = manual + dialServer.getName() + ":" + dialServer.getAddress();
 			}
 			prop.setProperty(PROPERTY_MANUAL_SERVERS, manual);
 			prop.store(new FileOutputStream("config.properties"), null);
@@ -933,8 +861,13 @@ public class FlingFrame extends JFrame implements ActionListener, BroadcastDisco
 	@Override
 	public void windowClosing(WindowEvent arg0) {
 		// TODO Auto-generated method stub
-		if (rampClient != null) {
-			rampClient.stop();
+		if (selectedChromeCast != null) {
+            try {
+                selectedChromeCast.stopApp();
+                selectedChromeCast.disconnect();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
 		}
 	}
 
